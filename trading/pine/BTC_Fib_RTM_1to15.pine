@@ -1,14 +1,12 @@
 //@version=5
 // =============================================================================
-// BTC Fib Two-Zone + RTM  |  Chart TF: 1m–15m  |  Bias TF: selectable (default 240)
+// BTC Fib Two-Zone + RTM  |  Chart TF: 1m–15m
 // =============================================================================
-// منطق:
-// 1) فیبو دو‌ناحیه روی تایم بالاتر → بایاس بای/سل
-// 2) ورود روی تایم چارت با Order Block (RTM) هم‌راستا با بایاس
-// 3) استاپ تنگ: چند تیک آن‌سوی OB
-// 4) تارگت: 1.618 فیبو موج اول (دو ناحیه روی LTF)
-// 5) عبور از ناحیه قبلی → به‌روزرسانی فیبو
-// 6) ضعف روی 1.618 → برگشت جهت (سل بعد از بای و برعکس)
+// ملاک چارت نمونه (۵م):
+// - بعد از دراپ: Fib0 = کف اخیر ، Fib1 = اولین سقف برگشت (موج اول)
+// - تارگت = 1.618 (اغلب نزدیک زون سقف/Supply قبلی)
+// - سطوح منفی ‎-0.27 / -0.618‎ زیر کف برای استاپ تنگ RTM
+// - ضعف روی 1.618 داخل زون سقف → سل معکوس
 // =============================================================================
 strategy(
      title              = "BTC Fib+RTM (1-15m)",
@@ -22,83 +20,55 @@ strategy(
      commission_value   = 0.04,
      slippage           = 2,
      process_orders_on_close = true,
-     max_lines_count    = 50,
+     max_lines_count    = 60,
      max_labels_count   = 50,
-     max_boxes_count    = 20
+     max_boxes_count    = 30
  )
 
 // ─── Inputs ─────────────────────────────────────────────────────────────────
-grpHTF  = "Higher TF Bias (Fib دو ناحیه)"
-htfTf   = input.timeframe("240", "تایم فیبو جهت‌دهنده", group = grpHTF,
-     tooltip = "برای چارت 1–15 دقیقه معمولاً 60 یا 240 مناسب است")
-htfSwing = input.int(5, "Pivot HTF (چپ/راست)", minval = 2, maxval = 20, group = grpHTF)
+grpHTF   = "Higher TF Bias"
+htfTf    = input.timeframe("240", "تایم فیبو جهت‌دهنده", group = grpHTF)
+htfSwing = input.int(5, "Pivot HTF", minval = 2, maxval = 20, group = grpHTF)
 
-grpLTF  = "Lower TF (موج اول + RTM)"
-ltfSwing = input.int(3, "Pivot LTF (چپ/راست)", minval = 2, maxval = 15, group = grpLTF)
-impulseBars = input.int(3, "حداقل کندل ایمپالس بعد از OB", minval = 1, maxval = 10, group = grpLTF)
-impulseAtr  = input.float(0.8, "حداقل حرکت ایمپالس × ATR", minval = 0.2, step = 0.1, group = grpLTF)
-obLookback  = input.int(30, "جستجوی OB (بار)", minval = 10, maxval = 100, group = grpLTF)
-obTouchTol  = input.float(0.15, "تلورانس لمس OB × ATR", minval = 0.0, step = 0.05, group = grpLTF)
+grpWave  = "موج اول (مثل چارت ۵م)"
+ltfSwing = input.int(2, "Pivot LTF (موج اول کوتاه)", minval = 1, maxval = 10, group = grpWave,
+     tooltip = "برای موج اول بعد از دراپ، ۲ مناسب‌تر از ۳–۵ است")
+minWaveAtr = input.float(0.35, "حداقل طول موج × ATR", minval = 0.1, step = 0.05, group = grpWave)
+extendFib1 = input.bool(true, "اگر قیمت > Fib1 → Fib1 را بالا ببر", group = grpWave)
 
-grpRisk = "ریسک / تارگت"
-slBufferAtr = input.float(0.1, "بافر استاپ RTM × ATR", minval = 0.0, step = 0.05, group = grpRisk,
-     tooltip = "استاپ تنگ آن‌سوی کف/سقف Order Block")
+grpRTM   = "RTM Order Block"
+impulseBars = input.int(3, "کندل ایمپالس", minval = 1, maxval = 10, group = grpRTM)
+impulseAtr  = input.float(0.6, "حداقل ایمپالس × ATR", minval = 0.2, step = 0.1, group = grpRTM)
+obLookback  = input.int(25, "جستجوی OB", minval = 8, maxval = 80, group = grpRTM)
+obTouchTol  = input.float(0.12, "تلورانس لمس OB × ATR", minval = 0.0, step = 0.05, group = grpRTM)
+
+grpRisk  = "ریسک / تارگت / زون سقف"
 fibTpRatio  = input.float(1.618, "تارگت فیبو", minval = 1.0, step = 0.001, group = grpRisk)
-fibExtWeak  = input.float(1.618, "سطح ضعف / برگشت", minval = 1.0, step = 0.001, group = grpRisk)
-useFib186   = input.bool(true, "نمایش سطح 1.86", group = grpRisk)
-rrFallback  = input.float(2.0, "RR جایگزین اگر فیبو نامعتبر", minval = 1.0, step = 0.1, group = grpRisk)
+useNegFib   = input.bool(true, "استاپ از فیبو منفی (-0.27)", group = grpRisk)
+negSlRatio  = input.float(-0.27, "نسبت استاپ منفی", step = 0.01, group = grpRisk)
+slBufferAtr = input.float(0.08, "بافر اضافه × ATR", minval = 0.0, step = 0.02, group = grpRisk)
+capLookback = input.int(80, "جستجوی سقف قبلی (Supply)", minval = 20, maxval = 300, group = grpRisk)
+capAtrNear  = input.float(0.6, "نزدیکی 1.618 به سقف × ATR", minval = 0.1, step = 0.1, group = grpRisk)
+rrFallback  = input.float(2.0, "RR جایگزین", minval = 1.0, step = 0.1, group = grpRisk)
 
-grpWeak = "ضعف روی 1.618"
-weakWickAtr = input.float(0.25, "حداقل سایه رد × ATR", minval = 0.05, step = 0.05, group = grpWeak)
-allowReverse = input.bool(true, "بعد از ضعف → ورود معکوس", group = grpWeak)
+grpWeak  = "ضعف روی 1.618 + زون سقف"
+weakWickAtr = input.float(0.2, "سایه رد × ATR", minval = 0.05, step = 0.05, group = grpWeak)
+allowReverse = input.bool(true, "ضعف → سل/بای معکوس", group = grpWeak)
+requireCap  = input.bool(true, "ضعف فقط اگر 1.618 نزدیک سقف قبلی باشد", group = grpWeak)
 
-grpVis = "نمایش"
-showHtfFib = input.bool(true, "فیبو HTF", group = grpVis)
-showLtfFib = input.bool(true, "فیبو LTF موج اول", group = grpVis)
+grpVis   = "نمایش"
+showHtfFib = input.bool(false, "فیبو HTF", group = grpVis)
+showLtfFib = input.bool(true, "فیبو موج اول + منفی", group = grpVis)
+showCap    = input.bool(true, "باکس زون سقف (Supply)", group = grpVis)
 showOb     = input.bool(true, "باکس Order Block", group = grpVis)
-showTable  = input.bool(true, "جدول وضعیت", group = grpVis)
+showTable  = input.bool(true, "جدول", group = grpVis)
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 atr = ta.atr(14)
 
 f_fib(float a, float b, float r) =>
     a + (b - a) * r
 
-f_pivot_pair(float ph, float pl, int ageH, int ageL, bool preferUp) =>
-    // برمی‌گرداند: [leg0, leg1, valid, bullishLeg]
-    // bullishLeg: از کف به سقف (بای موج) ؛ bearishLeg: از سقف به کف
-    float leg0 = na
-    float leg1 = na
-    bool  valid = false
-    bool  bull  = preferUp
-    if not na(ph) and not na(pl)
-        if preferUp
-            // آخرین ساختار هم‌جهت بایاس: low سپس high
-            if ageL >= ageH
-                leg0 := pl
-                leg1 := ph
-                bull := true
-                valid := ph > pl
-            else
-                // high جدیدتر از low → برای سل
-                leg0 := ph
-                leg1 := pl
-                bull := false
-                valid := pl < ph
-        else
-            if ageH >= ageL
-                leg0 := ph
-                leg1 := pl
-                bull := false
-                valid := pl < ph
-            else
-                leg0 := pl
-                leg1 := ph
-                bull := true
-                valid := ph > pl
-    [leg0, leg1, valid, bull]
-
-// ─── HTF swings + bias ───────────────────────────────────────────────────────
+// ─── HTF bias ────────────────────────────────────────────────────────────────
 htfHigh = request.security(syminfo.tickerid, htfTf, ta.pivothigh(high, htfSwing, htfSwing), barmerge.gaps_off, barmerge.lookahead_off)
 htfLow  = request.security(syminfo.tickerid, htfTf, ta.pivotlow(low, htfSwing, htfSwing),  barmerge.gaps_off, barmerge.lookahead_off)
 
@@ -106,7 +76,6 @@ var float htfPh = na
 var float htfPl = na
 var int   htfAgeH = 100000
 var int   htfAgeL = 100000
-
 htfAgeH += 1
 htfAgeL += 1
 if not na(htfHigh)
@@ -116,91 +85,135 @@ if not na(htfLow)
     htfPl := htfLow
     htfAgeL := 0
 
-// بایاس: ساختار HTF — اگر آخرین pivot مهم‌تر کفِ قدیمی‌تر و سقفِ جدیدتر باشد → بای
-var int bias = 0  // 1 buy, -1 sell, 0 flat
+var int bias = 0
 if not na(htfPh) and not na(htfPl)
-    // موج صعودی دو ناحیه: از Pl به Ph وقتی Ph جدیدتر است
     if htfAgeH < htfAgeL and htfPh > htfPl
         bias := 1
     else if htfAgeL < htfAgeH and htfPl < htfPh
         bias := -1
 
-[htf0, htf1, htfOk, htfBull] = f_pivot_pair(htfPh, htfPl, htfAgeH, htfAgeL, bias >= 0)
-htfFib1618 = htfOk ? f_fib(htf0, htf1, fibExtWeak) : na
-htfFib186  = htfOk ? f_fib(htf0, htf1, 1.86) : na
-htfFib05   = htfOk ? f_fib(htf0, htf1, 0.5) : na
-htfFib618  = htfOk ? f_fib(htf0, htf1, 0.618) : na
+htf0 = na(htfPh) or na(htfPl) ? na : bias >= 0 ? htfPl : htfPh
+htf1 = na(htfPh) or na(htfPl) ? na : bias >= 0 ? htfPh : htfPl
+htfOk = not na(htf0) and not na(htf1) and htf0 != htf1
+htfFib1618 = htfOk ? f_fib(htf0, htf1, fibTpRatio) : na
 
-// ─── LTF swings (موج اول / دو ناحیه) ─────────────────────────────────────────
+// ─── Prior swing high = Supply / Cap (مثل زون خاکستری نزدیک High) ───────────
+priorHighPivot = ta.pivothigh(high, ltfSwing, ltfSwing)
+var float capHigh = na
+var float capLow  = na
+var int   capBar  = na
+if not na(priorHighPivot)
+    // زون سقف: از بدنه تا سایهٔ همان پیوت
+    capHigh := priorHighPivot
+    capLow  := math.min(open[ltfSwing], close[ltfSwing])
+    capBar  := bar_index - ltfSwing
+
+// سقف مطلق اخیر برای confluence با 1.618
+recentHigh = ta.highest(high, capLookback)
+recentLow  = ta.lowest(low, capLookback)
+
+// ─── موج اول: آخرین PivotLow → اولین PivotHigh بعدش (بای)
+//               یا آخرین PivotHigh → اولین PivotLow بعدش (سل) ───────────────
 ph = ta.pivothigh(high, ltfSwing, ltfSwing)
 pl = ta.pivotlow(low, ltfSwing, ltfSwing)
 
-var float leg0 = na
-var float leg1 = na
-var bool  legBull = true
-var bool  legValid = false
-var int   ageH = 100000
-var int   ageL = 100000
-var float lastZoneHigh = na
-var float lastZoneLow  = na
+var float wave0 = na
+var float wave1 = na
+var bool  waveBull = true
+var bool  waveOk = false
+var int   wave0Bar = na
+var int   wave1Bar = na
 
-ageH += 1
-ageL += 1
-if not na(ph)
-    ageH := 0
-    lastZoneHigh := ph
+// صف پیوت‌ها
+var float lastPl = na
+var int   lastPlBar = na
+var float lastPh = na
+var int   lastPhBar = na
+
 if not na(pl)
-    ageL := 0
-    lastZoneLow := pl
+    lastPl := pl
+    lastPlBar := bar_index - ltfSwing
+    // اگر بایاس بای / یا ساختار بازیابی بعد از کف: منتظر سقف بعدی برای بستن موج اول
+    if bias >= 0 or na(wave0)
+        wave0 := pl
+        wave0Bar := lastPlBar
+        wave1 := na
+        waveOk := false
+        waveBull := true
 
-// به‌روزرسانی فیبو وقتی قیمت از ناحیه قبلی بالاتر/پایین‌تر رفت
-if not na(leg1) and legBull and high > leg1
-    // سقف ناحیه شکسته → نقطه 1 به سقف جدید
-    leg1 := high
-    legValid := true
-if not na(leg1) and not legBull and low < leg1
-    leg1 := low
-    legValid := true
+if not na(ph)
+    lastPh := ph
+    lastPhBar := bar_index - ltfSwing
+    if bias < 0 or (na(wave0) and bias < 0)
+        wave0 := ph
+        wave0Bar := lastPhBar
+        wave1 := na
+        waveOk := false
+        waveBull := false
 
-// ساخت/بازسازی لگ از دو pivot
-if not na(ph) or not na(pl)
-    preferUp = bias >= 0
-    [a0, a1, ok, bull] = f_pivot_pair(
-         nz(lastZoneHigh, ph),
-         nz(lastZoneLow, pl),
-         ageH,
-         ageL,
-         preferUp
-     )
-    if ok
-        // فقط وقتی لگ جدید معنی‌دار است جایگزین کن
-        bool rebuild = na(leg0) or na(leg1) or bull != legBull or math.abs(a1 - leg1) > atr * 0.05
-        if rebuild
-            leg0 := a0
-            leg1 := a1
-            legBull := bull
-            legValid := true
+// بستن موج اول بای: اولین سقف بعد از کف موج
+if waveBull and not na(wave0) and not na(ph) and (bar_index - ltfSwing) > nz(wave0Bar, -1)
+    float cand1 = ph
+    if math.abs(cand1 - wave0) >= minWaveAtr * atr
+        wave1 := cand1
+        wave1Bar := bar_index - ltfSwing
+        waveOk := true
 
-fib0    = legValid ? leg0 : na
-fib1    = legValid ? leg1 : na
-fib05   = legValid ? f_fib(leg0, leg1, 0.5) : na
-fib618  = legValid ? f_fib(leg0, leg1, 0.618) : na
-fib1618 = legValid ? f_fib(leg0, leg1, fibTpRatio) : na
-fib186  = legValid ? f_fib(leg0, leg1, 1.86) : na
+// بستن موج اول سل: اولین کف بعد از سقف موج
+if not waveBull and not na(wave0) and not na(pl) and (bar_index - ltfSwing) > nz(wave0Bar, -1)
+    float cand1 = pl
+    if math.abs(wave0 - cand1) >= minWaveAtr * atr
+        wave1 := cand1
+        wave1Bar := bar_index - ltfSwing
+        waveOk := true
 
-// عبور از 1.618 و ناحیه روبه‌رو → آماده فیبو دوم / ضعف
-passedExt = legValid and (
-     (legBull and close > fib1618 and close > leg1) or
-     (not legBull and close < fib1618 and close < leg1)
+// اگر قیمت از Fib1 بالاتر رفت → Fib1 را به سقف جدید ببر (مثل سبک شما)
+if extendFib1 and waveOk and waveBull and high > wave1
+    wave1 := high
+    wave1Bar := bar_index
+if extendFib1 and waveOk and not waveBull and low < wave1
+    wave1 := low
+    wave1Bar := bar_index
+
+// اگر هنوز موج کامل نشده ولی کف+سقف اخیر داریم، از جفت آخر استفاده کن
+if not waveOk and not na(lastPl) and not na(lastPh)
+    if bias >= 0 and lastPhBar > lastPlBar and (lastPh - lastPl) >= minWaveAtr * atr
+        wave0 := lastPl
+        wave1 := lastPh
+        wave0Bar := lastPlBar
+        wave1Bar := lastPhBar
+        waveBull := true
+        waveOk := true
+    else if bias < 0 and lastPlBar > lastPhBar and (lastPh - lastPl) >= minWaveAtr * atr
+        wave0 := lastPh
+        wave1 := lastPl
+        wave0Bar := lastPhBar
+        wave1Bar := lastPlBar
+        waveBull := false
+        waveOk := true
+
+fib0     = waveOk ? wave0 : na
+fib1     = waveOk ? wave1 : na
+fib05    = waveOk ? f_fib(wave0, wave1, 0.5) : na
+fib618   = waveOk ? f_fib(wave0, wave1, 0.618) : na
+fib1618  = waveOk ? f_fib(wave0, wave1, fibTpRatio) : na
+fib186   = waveOk ? f_fib(wave0, wave1, 1.86) : na
+fibNeg27 = waveOk ? f_fib(wave0, wave1, negSlRatio) : na
+fibNeg618 = waveOk ? f_fib(wave0, wave1, -0.618) : na
+
+// 1.618 نزدیک سقف قبلی؟ (ملاک زون خاکستری چارت)
+capConfluence = waveOk and not na(fib1618) and math.abs(fib1618 - recentHigh) <= capAtrNear * atr
+passedExt = waveOk and ((waveBull and close > fib1618 and close > wave1) or (not waveBull and close < fib1618 and close < wave1))
+
+// ضعف روی 1.618 داخل/نزدیک زون سقف
+near1618 = waveOk and (
+     (waveBull and high >= fib1618 - 0.05 * atr) or
+     (not waveBull and low <= fib1618 + 0.05 * atr)
  )
-
-// ضعف روی 1.618: نفوذ و برگشت با سایه
-weakSell = legValid and legBull and high >= fib1618 and close < fib1618 and (high - math.max(open, close)) >= weakWickAtr * atr
-weakBuy  = legValid and not legBull and low <= fib1618 and close > fib1618 and (math.min(open, close) - low) >= weakWickAtr * atr
+weakSell = waveOk and waveBull and near1618 and close < fib1618 and (high - math.max(open, close)) >= weakWickAtr * atr and (not requireCap or capConfluence)
+weakBuy  = waveOk and not waveBull and near1618 and close > fib1618 and (math.min(open, close) - low) >= weakWickAtr * atr and (not requireCap or capConfluence)
 
 // ─── RTM Order Block ─────────────────────────────────────────────────────────
-// Bullish OB: آخرین کندل نزولی قبل از ایمپالس صعودی
-// Bearish OB: آخرین کندل صعودی قبل از ایمپالس نزولی
 var float bullObTop = na
 var float bullObBot = na
 var int   bullObBar = na
@@ -208,18 +221,16 @@ var float bearObTop = na
 var float bearObBot = na
 var int   bearObBar = na
 
-impulseUp = close > open and (close - open) >= impulseAtr * atr * 0.5 and (high - low) >= impulseAtr * atr * 0.35
-impulseDn = close < open and (open - close) >= impulseAtr * atr * 0.5 and (high - low) >= impulseAtr * atr * 0.35
+impulseUp = close > open and (close - open) >= impulseAtr * atr * 0.45
+impulseDn = close < open and (open - close) >= impulseAtr * atr * 0.45
 
-// تشخیص OB در lookback وقتی ایمپالس رخ می‌دهد
 if impulseUp
     float sumMove = 0.0
     for i = 0 to impulseBars - 1
         sumMove += close[i] - open[i]
-    if sumMove > impulseAtr * atr
+    if sumMove > impulseAtr * atr * 0.8
         for j = 1 to obLookback
             if close[j] < open[j]
-                // اولین (نزدیک‌ترین) کندل نزولی قبل از رالی
                 bullObTop := math.max(open[j], close[j])
                 bullObBot := low[j]
                 bullObBar := bar_index - j
@@ -229,7 +240,7 @@ if impulseDn
     float sumMove = 0.0
     for i = 0 to impulseBars - 1
         sumMove += open[i] - close[i]
-    if sumMove > impulseAtr * atr
+    if sumMove > impulseAtr * atr * 0.8
         for j = 1 to obLookback
             if close[j] > open[j]
                 bearObTop := high[j]
@@ -240,20 +251,25 @@ if impulseDn
 tol = obTouchTol * atr
 inBullOb = not na(bullObTop) and low <= bullObTop + tol and high >= bullObBot - tol
 inBearOb = not na(bearObTop) and high >= bearObBot - tol and low <= bearObTop + tol
-
 confirmBuy  = inBullOb and close > open and close >= bullObTop
 confirmSell = inBearOb and close < open and close <= bearObBot
 
-// ─── Entries / Exits ─────────────────────────────────────────────────────────
-longCond  = bias == 1 and confirmBuy and legValid and legBull and strategy.position_size == 0
-shortCond = bias == -1 and confirmSell and legValid and not legBull and strategy.position_size == 0
+// ورود: بایاس HTF + موج اول کامل + لمس/تأیید OB
+// در نمونهٔ شما: بای به سمت 1.618 وقتی قیمت نزدیک/بالای Fib1 است
+longCond  = bias == 1 and waveOk and waveBull and confirmBuy and strategy.position_size == 0 and close < fib1618
+shortCond = bias == -1 and waveOk and not waveBull and confirmSell and strategy.position_size == 0 and close > fib1618
 
-// معکوس روی ضعف 1.618
 revShort = allowReverse and weakSell and strategy.position_size >= 0
 revLong  = allowReverse and weakBuy and strategy.position_size <= 0
 
-longSlNow  = not na(bullObBot) ? bullObBot - slBufferAtr * atr : low - slBufferAtr * atr
-shortSlNow = not na(bearObTop) ? bearObTop + slBufferAtr * atr : high + slBufferAtr * atr
+// استاپ تنگ RTM: نزدیک‌ترین سطح امن زیر/بالای ورود (OB یا فیبو -0.27)
+longSlOb   = not na(bullObBot) ? bullObBot - slBufferAtr * atr : low - slBufferAtr * atr
+longSlFib  = useNegFib and not na(fibNeg27) ? fibNeg27 - slBufferAtr * atr : longSlOb
+longSlNow  = math.max(longSlOb, longSlFib)  // برای لانگ: استاپ بالاتر = ریسک کمتر (تنگ‌تر)
+
+shortSlOb  = not na(bearObTop) ? bearObTop + slBufferAtr * atr : high + slBufferAtr * atr
+shortSlFib = useNegFib and not na(fibNeg27) ? fibNeg27 + slBufferAtr * atr : shortSlOb
+shortSlNow = math.min(shortSlOb, shortSlFib)  // برای شورت: استاپ پایین‌تر = تنگ‌تر
 
 var float entrySl = na
 var float entryTp = na
@@ -271,93 +287,107 @@ if shortCond
     strategy.exit("S-Exit", from_entry = "Short RTM", stop = entrySl, limit = entryTp)
 
 if revShort and not shortCond
-    strategy.close("Long RTM", comment = "Weak 1.618")
+    strategy.close("Long RTM", comment = "Weak@1.618+Cap")
     entrySl := high + slBufferAtr * atr
-    entryTp := legValid ? leg0 : close - rrFallback * (entrySl - close)
+    entryTp := waveOk ? wave0 : close - rrFallback * (entrySl - close)
     strategy.entry("Short Weak", strategy.short)
     strategy.exit("SW-Exit", from_entry = "Short Weak", stop = entrySl, limit = entryTp)
 
 if revLong and not longCond
-    strategy.close("Short RTM", comment = "Weak 1.618")
+    strategy.close("Short RTM", comment = "Weak@1.618+Cap")
     entrySl := low - slBufferAtr * atr
-    entryTp := legValid ? leg0 : close + rrFallback * (close - entrySl)
+    entryTp := waveOk ? wave0 : close + rrFallback * (close - entrySl)
     strategy.entry("Long Weak", strategy.long)
     strategy.exit("LW-Exit", from_entry = "Long Weak", stop = entrySl, limit = entryTp)
 
-// گسترش فیبو: فقط تارگت را جلو ببر (استاپ قفل می‌ماند)
-if strategy.position_size > 0 and legValid and legBull and not na(fib1618) and not na(entrySl)
+if strategy.position_size > 0 and waveOk and waveBull and not na(fib1618) and not na(entrySl)
     if fib1618 > nz(entryTp, fib1618)
         entryTp := fib1618
     strategy.exit("L-Exit", from_entry = "Long RTM", stop = entrySl, limit = entryTp)
-if strategy.position_size < 0 and legValid and not legBull and not na(fib1618) and not na(entrySl)
+if strategy.position_size < 0 and waveOk and not waveBull and not na(fib1618) and not na(entrySl)
     if fib1618 < nz(entryTp, fib1618)
         entryTp := fib1618
     strategy.exit("S-Exit", from_entry = "Short RTM", stop = entrySl, limit = entryTp)
 
 // ─── Visuals ─────────────────────────────────────────────────────────────────
-var line h0 = na
-var line h1 = na
-var line h1618 = na
 var line l0 = na
 var line l1 = na
 var line l1618 = na
 var line l186 = na
+var line lNeg = na
+var line h0 = na
+var line h1 = na
+var box capBox = na
 var box bullBox = na
 var box bearBox = na
+var label tpLab = na
 
 if barstate.islast
     if showHtfFib and htfOk
         line.delete(h0)
         line.delete(h1)
-        line.delete(h1618)
-        h0 := line.new(bar_index - 40, htf0, bar_index + 5, htf0, color = color.new(color.gray, 30), style = line.style_dotted, width = 1)
-        h1 := line.new(bar_index - 40, htf1, bar_index + 5, htf1, color = color.new(color.gray, 30), style = line.style_dotted, width = 1)
-        h1618 := line.new(bar_index - 40, htfFib1618, bar_index + 5, htfFib1618, color = color.new(color.orange, 20), style = line.style_dashed, width = 1)
-    if showLtfFib and legValid
+        h0 := line.new(bar_index - 50, htf0, bar_index + 5, htf0, color = color.new(color.gray, 40), style = line.style_dotted)
+        h1 := line.new(bar_index - 50, htf1, bar_index + 5, htf1, color = color.new(color.gray, 40), style = line.style_dotted)
+    if showLtfFib and waveOk
         line.delete(l0)
         line.delete(l1)
         line.delete(l1618)
         line.delete(l186)
-        l0 := line.new(bar_index - 25, fib0, bar_index + 5, fib0, color = color.teal, width = 1)
-        l1 := line.new(bar_index - 25, fib1, bar_index + 5, fib1, color = color.teal, width = 1)
-        l1618 := line.new(bar_index - 25, fib1618, bar_index + 5, fib1618, color = color.yellow, width = 2)
-        if useFib186
-            l186 := line.new(bar_index - 25, fib186, bar_index + 5, fib186, color = color.new(color.yellow, 40), width = 1)
+        line.delete(lNeg)
+        label.delete(tpLab)
+        int x0 = math.max(0, nz(wave0Bar, bar_index - 20))
+        l0 := line.new(x0, fib0, bar_index + 8, fib0, color = color.white, width = 1)
+        l1 := line.new(x0, fib1, bar_index + 8, fib1, color = color.white, width = 1)
+        l1618 := line.new(x0, fib1618, bar_index + 8, fib1618, color = color.yellow, width = 2)
+        l186 := line.new(x0, fib186, bar_index + 8, fib186, color = color.new(color.yellow, 35), width = 1)
+        if useNegFib
+            lNeg := line.new(x0, fibNeg27, bar_index + 8, fibNeg27, color = color.new(color.fuchsia, 20), style = line.style_dotted, width = 1)
+        tpLab := label.new(bar_index + 8, fib1618, "1.618 TP", style = label.style_label_left, color = color.new(color.yellow, 70), textcolor = color.yellow, size = size.small)
+    if showCap and not na(capHigh)
+        box.delete(capBox)
+        // زون سقف مثل باکس خاکستری چارت شما
+        float top = math.max(capHigh, recentHigh)
+        float bot = not na(fib1618) ? math.min(nz(capLow, fib1618), fib1618) : nz(capLow, top - atr)
+        capBox := box.new(math.max(0, bar_index - capLookback), top, bar_index + 5, bot, bgcolor = color.new(color.gray, 82), border_color = color.new(color.gray, 50))
     if showOb
         box.delete(bullBox)
         box.delete(bearBox)
         if not na(bullObTop)
-            bullBox := box.new(math.max(0, nz(bullObBar, bar_index) ), bullObTop, bar_index + 3, bullObBot, bgcolor = color.new(color.green, 85), border_color = color.new(color.green, 50))
+            bullBox := box.new(math.max(0, nz(bullObBar, bar_index)), bullObTop, bar_index + 3, bullObBot, bgcolor = color.new(color.green, 85), border_color = color.new(color.green, 40))
         if not na(bearObTop)
-            bearBox := box.new(math.max(0, nz(bearObBar, bar_index) ), bearObTop, bar_index + 3, bearObBot, bgcolor = color.new(color.red, 85), border_color = color.new(color.red, 50))
+            bearBox := box.new(math.max(0, nz(bearObBar, bar_index)), bearObTop, bar_index + 3, bearObBot, bgcolor = color.new(color.red, 85), border_color = color.new(color.red, 40))
 
-plotshape(longCond, title = "Buy", style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.small, text = "RTM B")
-plotshape(shortCond, title = "Sell", style = shape.triangledown, location = location.abovebar, color = color.red, size = size.small, text = "RTM S")
-plotshape(weakSell, title = "Weak→Sell", style = shape.circle, location = location.abovebar, color = color.orange, size = size.tiny)
-plotshape(weakBuy, title = "Weak→Buy", style = shape.circle, location = location.belowbar, color = color.aqua, size = size.tiny)
+plotshape(longCond, title = "Buy", style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.small, text = "B")
+plotshape(shortCond, title = "Sell", style = shape.triangledown, location = location.abovebar, color = color.red, size = size.small, text = "S")
+plotshape(weakSell, title = "Weak Sell", style = shape.circle, location = location.abovebar, color = color.orange, size = size.tiny)
+plotshape(weakBuy, title = "Weak Buy", style = shape.circle, location = location.belowbar, color = color.aqua, size = size.tiny)
+
+plot(showLtfFib and waveOk ? fib05 : na, "0.5", color.new(color.gray, 60), style = plot.style_linebr)
+plot(showLtfFib and waveOk ? fib618 : na, "0.618", color.new(color.gray, 50), style = plot.style_linebr)
 
 if showTable
-    var table t = table.new(position.top_right, 2, 8, bgcolor = color.new(color.black, 70), border_width = 1)
+    var table t = table.new(position.top_right, 2, 9, bgcolor = color.new(color.black, 70), border_width = 1)
     if barstate.islast
-        table.cell(t, 0, 0, "Bias HTF", text_color = color.white, text_size = size.small)
+        table.cell(t, 0, 0, "Bias", text_color = color.white, text_size = size.small)
         table.cell(t, 1, 0, bias == 1 ? "BUY" : bias == -1 ? "SELL" : "FLAT", text_color = bias == 1 ? color.lime : bias == -1 ? color.red : color.gray, text_size = size.small)
-        table.cell(t, 0, 1, "LTF Fib 0", text_color = color.gray, text_size = size.small)
+        table.cell(t, 0, 1, "Fib0", text_color = color.gray, text_size = size.small)
         table.cell(t, 1, 1, str.tostring(fib0, format.mintick), text_color = color.white, text_size = size.small)
-        table.cell(t, 0, 2, "LTF Fib 1", text_color = color.gray, text_size = size.small)
+        table.cell(t, 0, 2, "Fib1", text_color = color.gray, text_size = size.small)
         table.cell(t, 1, 2, str.tostring(fib1, format.mintick), text_color = color.white, text_size = size.small)
         table.cell(t, 0, 3, "TP 1.618", text_color = color.yellow, text_size = size.small)
         table.cell(t, 1, 3, str.tostring(fib1618, format.mintick), text_color = color.yellow, text_size = size.small)
-        table.cell(t, 0, 4, "Passed Ext", text_color = color.gray, text_size = size.small)
-        table.cell(t, 1, 4, passedExt ? "YES" : "no", text_color = passedExt ? color.orange : color.gray, text_size = size.small)
-        table.cell(t, 0, 5, "Bull OB", text_color = color.gray, text_size = size.small)
-        table.cell(t, 1, 5, not na(bullObTop) ? str.tostring(bullObBot, format.mintick) + "-" + str.tostring(bullObTop, format.mintick) : "—", text_color = color.lime, text_size = size.small)
-        table.cell(t, 0, 6, "Bear OB", text_color = color.gray, text_size = size.small)
-        table.cell(t, 1, 6, not na(bearObTop) ? str.tostring(bearObBot, format.mintick) + "-" + str.tostring(bearObTop, format.mintick) : "—", text_color = color.red, text_size = size.small)
-        table.cell(t, 0, 7, "Chart", text_color = color.gray, text_size = size.small)
-        table.cell(t, 1, 7, timeframe.period + " | HTF " + htfTf, text_color = color.white, text_size = size.small)
+        table.cell(t, 0, 4, "SL -0.27", text_color = color.fuchsia, text_size = size.small)
+        table.cell(t, 1, 4, str.tostring(fibNeg27, format.mintick), text_color = color.fuchsia, text_size = size.small)
+        table.cell(t, 0, 5, "Cap≈1.618", text_color = color.gray, text_size = size.small)
+        table.cell(t, 1, 5, capConfluence ? "YES" : "no", text_color = capConfluence ? color.orange : color.gray, text_size = size.small)
+        table.cell(t, 0, 6, "PassedExt", text_color = color.gray, text_size = size.small)
+        table.cell(t, 1, 6, passedExt ? "YES" : "no", text_color = passedExt ? color.orange : color.gray, text_size = size.small)
+        table.cell(t, 0, 7, "RecentHi", text_color = color.gray, text_size = size.small)
+        table.cell(t, 1, 7, str.tostring(recentHigh, format.mintick), text_color = color.white, text_size = size.small)
+        table.cell(t, 0, 8, "TF", text_color = color.gray, text_size = size.small)
+        table.cell(t, 1, 8, timeframe.period + "/" + htfTf, text_color = color.white, text_size = size.small)
 
-// هشدارها برای اتوماسیون بعدی
-alertcondition(longCond, title = "RTM Long", message = "FibRTM LONG {{ticker}} @ {{close}}")
-alertcondition(shortCond, title = "RTM Short", message = "FibRTM SHORT {{ticker}} @ {{close}}")
-alertcondition(weakSell, title = "Weak 1.618 Sell", message = "FibRTM WEAK→SELL {{ticker}} @ {{close}}")
-alertcondition(weakBuy, title = "Weak 1.618 Buy", message = "FibRTM WEAK→BUY {{ticker}} @ {{close}}")
+alertcondition(longCond, "RTM Long", "FibRTM LONG {{ticker}} @ {{close}} TP={{plot_0}}")
+alertcondition(shortCond, "RTM Short", "FibRTM SHORT {{ticker}} @ {{close}}")
+alertcondition(weakSell, "Weak→Sell@Cap", "FibRTM WEAK SELL {{ticker}} @ {{close}}")
+alertcondition(weakBuy, "Weak→Buy@Cap", "FibRTM WEAK BUY {{ticker}} @ {{close}}")
