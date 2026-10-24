@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>سیمولاتور سیستم کنترلی — دو آردوینو</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>سیمولاتور سیستم کنترلی</h1>
+          <p>دو آردوینو · PID · اسیلوسکوپ زنده</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="btnRun" class="btn primary" type="button">شروع</button>
+        <button id="btnPause" class="btn" type="button" disabled>توقف</button>
+        <button id="btnReset" class="btn" type="button">ریست</button>
+        <button id="btnStep" class="btn ghost" type="button">گام</button>
+      </div>
+    </header>
+
+    <section class="boards" aria-label="دو برد آردوینو">
+      <article class="board controller" id="boardController">
+        <div class="board-header">
+          <span class="led" id="ledController"></span>
+          <h2>آردوینو ۱ — کنترلر PID</h2>
+          <span class="role">CONTROLLER</span>
+        </div>
+        <div class="board-body">
+          <div class="chip">ATmega328P / ESP8266</div>
+          <dl class="metrics">
+            <div><dt>ست‌پوینت (r)</dt><dd id="mSetpoint">0.00</dd></div>
+            <div><dt>خطا (e)</dt><dd id="mError">0.00</dd></div>
+            <div><dt>فرمان u</dt><dd id="mControl">0.00</dd></div>
+            <div><dt>حالت</dt><dd id="mCtrlState">آماده</dd></div>
+          </dl>
+          <pre class="serial-log" id="logController" aria-label="سریال کنترلر"></pre>
+        </div>
+      </article>
+
+      <div class="link-rail" aria-hidden="true">
+        <div class="wire">
+          <span>u →</span>
+          <span>y ←</span>
+        </div>
+        <p>لینک سریال / سیگنال</p>
+      </div>
+
+      <article class="board plant" id="boardPlant">
+        <div class="board-header">
+          <span class="led" id="ledPlant"></span>
+          <h2>آردوینو ۲ — پروسه / فیدبک</h2>
+          <span class="role">PLANT</span>
+        </div>
+        <div class="board-body">
+          <div class="chip">Plant + Sensor</div>
+          <dl class="metrics">
+            <div><dt>خروجی y</dt><dd id="mOutput">0.00</dd></div>
+            <div><dt>اختلال d</dt><dd id="mDisturb">0.00</dd></div>
+            <div><dt>ورودی u</dt><dd id="mPlantU">0.00</dd></div>
+            <div><dt>حالت</dt><dd id="mPlantState">آماده</dd></div>
+          </dl>
+          <pre class="serial-log" id="logPlant" aria-label="سریال پروسه"></pre>
+        </div>
+      </article>
+    </section>
+
+    <section class="scope-panel" aria-label="اسیلوسکوپ">
+      <div class="scope-toolbar">
+        <h2>اسیلوسکوپ</h2>
+        <div class="legend">
+          <label><input type="checkbox" id="chSp" checked /> <i class="sw sp"></i> ست‌پوینت</label>
+          <label><input type="checkbox" id="chFb" checked /> <i class="sw fb"></i> فیدبک y</label>
+          <label><input type="checkbox" id="chU" checked /> <i class="sw u"></i> فرمان u</label>
+          <label><input type="checkbox" id="chE" /> <i class="sw e"></i> خطا e</label>
+        </div>
+        <div class="scope-meta">
+          <span id="scopeTime">t = 0.00 s</span>
+          <span>۱۰ ثانیه پنجره</span>
+        </div>
+      </div>
+      <canvas id="scope" width="1200" height="360"></canvas>
+    </section>
+
+    <section class="controls-grid">
+      <fieldset class="panel">
+        <legend>ست‌پوینت و ضرایب PID</legend>
+        <label>ست‌پوینت <output id="oSp">50</output>
+          <input type="range" id="setpoint" min="0" max="100" step="0.5" value="50" />
+        </label>
+        <label>Kp <output id="oKp">1.20</output>
+          <input type="range" id="kp" min="0" max="8" step="0.05" value="1.2" />
+        </label>
+        <label>Ki <output id="oKi">0.40</output>
+          <input type="range" id="ki" min="0" max="4" step="0.05" value="0.4" />
+        </label>
+        <label>Kd <output id="oKd">0.08</output>
+          <input type="range" id="kd" min="0" max="2" step="0.01" value="0.08" />
+        </label>
+        <div class="preset-row">
+          <button type="button" class="btn ghost" data-preset="slow">آهسته پایدار</button>
+          <button type="button" class="btn ghost" data-preset="fast">سریع</button>
+          <button type="button" class="btn ghost" data-preset="osc">نوسانی</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="panel">
+        <legend>شرایط پروسه</legend>
+        <label>بهره پروسه K <output id="oGain">1.0</output>
+          <input type="range" id="gain" min="0.2" max="3" step="0.05" value="1" />
+        </label>
+        <label>ثابت زمانی τ (s) <output id="oTau">1.5</output>
+          <input type="range" id="tau" min="0.2" max="5" step="0.1" value="1.5" />
+        </label>
+        <label>تأخیر حمل (s) <output id="oDelay">0.20</output>
+          <input type="range" id="delay" min="0" max="1.5" step="0.05" value="0.2" />
+        </label>
+        <label>اختلال <output id="oDist">0</output>
+          <input type="range" id="disturb" min="-30" max="30" step="1" value="0" />
+        </label>
+        <label class="check">
+          <input type="checkbox" id="noise" /> نویز اندازه‌گیری
+        </label>
+      </fieldset>
+
+      <fieldset class="panel status">
+        <legend>وضعیت حلقه</legend>
+        <ul id="statusList">
+          <li>حالت: آماده‌به‌کار</li>
+          <li>نمونه: هر ۲۰ میلی‌ثانیه</li>
+          <li>مدل: مرتبه اول + تأخیر</li>
+        </ul>
+        <p class="hint">
+          آردوینو ۱ ست‌پوینت و PID را محاسبه می‌کند؛ آردوینو ۲ پروسه را شبیه‌سازی کرده و فیدبک می‌فرستد.
+          موج‌ها روی اسیلوسکوپ زنده دیده می‌شوند.
+        </p>
+      </fieldset>
+    </section>
+  </div>
+  <script src="simulator.js"></script>
+</body>
+</html>
